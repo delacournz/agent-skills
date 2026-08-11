@@ -3,7 +3,7 @@ name: dlc-pr
 description: Create a GitHub pull request following project conventions using the gh CLI, with gitmoji conventional commit titles. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, PR template usage, title formatting, draft PRs, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
 metadata:
   author: chris@delacour.co.nz
-  version: "0.2.0"
+  version: "0.2.1"
   category: git
   tags: [git, github, pull-request, gh-cli, workflow]
 license: UNLICENSED
@@ -85,15 +85,29 @@ Only ask the user for what cannot be inferred, and ask everything in a single ro
 
 ### 5. Write the PR body to a file
 
-Check for a template in this order and use the first match:
+**If the repo has a PR template, always use it.** It is the repo's stated contract for what a PR description must contain, and reviewers and automation may depend on its sections. Never substitute your own format, and never fall back to the default body below while a template exists.
+
+Search for one before writing anything, and use the first match:
 
 1. `.github/pull_request_template.md`
 2. `.github/PULL_REQUEST_TEMPLATE.md`
 3. `.github/PULL_REQUEST_TEMPLATE/` (pick the matching template, or ask if several apply)
+4. `docs/pull_request_template.md` or a `pull_request_template.md` at the repo root
 
-If a template exists, match its structure exactly. Do not add, remove, or reorder sections. Fill every section, tick the correct change type boxes, and complete the checklist items that apply.
+```bash
+ls .github/pull_request_template.md .github/PULL_REQUEST_TEMPLATE.md docs/pull_request_template.md pull_request_template.md 2>/dev/null
+ls .github/PULL_REQUEST_TEMPLATE/ 2>/dev/null
+```
 
-If no template exists, use this default body:
+When a template is found, read it in full and:
+
+- Match its structure exactly. Do not add, remove, rename, or reorder sections.
+- Keep its HTML comments and instructions only if the template clearly expects them to stay. Otherwise replace the placeholder text with real content.
+- Fill every section. If a section genuinely does not apply, write `N/A` with a short reason rather than deleting it.
+- Tick the correct change type boxes and complete the checklist items that apply. Leave unticked anything you have not actually verified.
+- Keep the template's own issue reference syntax rather than inventing your own.
+
+Use the default body below **only** when no template exists anywhere in the repo:
 
 ```markdown
 ## Summary
