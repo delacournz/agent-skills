@@ -1,9 +1,9 @@
 ---
 name: dlc-pr
-description: Create a GitHub pull request following project conventions using the gh CLI, matching any repo-supplied rules for PR titles and descriptions (commitlint, semantic PR title actions, PR templates, contributor docs) and falling back to gitmoji conventional commit titles. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, convention detection, PR template usage, title formatting, draft PRs, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
+description: Create a GitHub pull request following project conventions using the gh CLI, matching any repo-supplied rules for PR titles and descriptions (commitlint, semantic PR title actions, PR templates, contributor docs) and falling back to gitmoji conventional commit titles. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, convention detection, PR template usage, title formatting, draft PRs, signing off the PR when the repo gates on gh-signoff, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
 metadata:
   author: chris@delacour.co.nz
-  version: "0.3.0"
+  version: "0.4.0"
   category: git
   tags: [git, github, pull-request, gh-cli, workflow]
 license: UNLICENSED
@@ -11,7 +11,7 @@ license: UNLICENSED
 
 # Delacour Pull Request Creator
 
-Create a well structured GitHub pull request from the current branch. This skill covers prerequisite checks, context gathering, branch hygiene, template compliant PR body authoring, and creation via the `gh` CLI.
+Create a well structured GitHub pull request from the current branch. This skill covers prerequisite checks, context gathering, branch hygiene, template compliant PR body authoring, creation via the `gh` CLI, and signing off the result in repos that gate on local CI.
 
 ## When to Use
 
@@ -259,11 +259,51 @@ Add `--draft` when the work is incomplete, when the user asks for a draft, or wh
 
 Delete the temporary body file afterwards.
 
-### 9. Report and follow up
+### 9. Sign off the PR when the repo gates on signoff
+
+Some repos replace cloud CI with [`basecamp/gh-signoff`](https://github.com/basecamp/gh-signoff): the checks run on the authoring machine and write the `signoff` commit statuses branch protection requires. In those repos a freshly created PR is unmergeable until someone signs it off, so creating the PR is only half the job.
+
+Detect it after the PR exists:
+
+```bash
+gh api "repos/{owner}/{repo}/branches/<base>/protection" --jq '.required_status_checks.contexts' 2>/dev/null
+gh extension list | grep gh-signoff
+rg -n "signoff" package.json 2>/dev/null
+ls scripts/ 2>/dev/null | grep -i signoff
+gh pr view <number> --json statusCheckRollup -q '[.statusCheckRollup[].context] | map(select(. != null))'
+```
+
+The repo gates on signoff if any of those show a `signoff` context, a gh-signoff extension, or a signoff wrapper script.
+
+Then, in order of preference:
+
+1. **The `dlc-signoff` skill, if it is available.** Invoke it and let it drive. It owns the preflight, the check plan, the status write order and the report comment, and it will not sign off a check that did not run.
+2. **The repo's own wrapper, if there is no skill.** `bun run signoff` or whatever the script is named. Read its source first, then follow its output.
+3. **By hand, if neither exists.** Run the repo's real checks in the foreground, then write the statuses only for what passed:
+
+   ```bash
+   SHA=$(git rev-parse HEAD)
+   gh signoff create <check> --commit "$SHA"   # one per passed check, sub-contexts first
+   gh signoff create --commit "$SHA"           # the bare umbrella context, LAST
+   ```
+
+   Always name `create` explicitly, and write the umbrella only after every sub-context write succeeded.
+
+Hard rules, whichever path you take:
+
+- **Never run bare `gh signoff` as a shortcut.** It writes a green status without running anything. Only the user can ask for an unverified signoff, and if they do, say so plainly on the PR.
+- **A failing check is work to do.** Fix it, commit, push, then sign off the new SHA. Never weaken a check to make it green.
+- **The status binds to the SHA.** Any later push to the branch drops it and signoff has to run again.
+- **Skip this step for a draft PR** unless the user asks, since a draft is not being merged yet.
+
+If the repo does not gate on signoff, skip this step entirely and let its normal CI run.
+
+### 10. Report and follow up
 
 - Print the PR URL returned by `gh pr create`.
 - State which convention source shaped the title and the body (repo config file, contributor doc, PR template, or this skill's defaults), and call out anywhere the repo overrode a default.
-- Mention that CI checks will run automatically.
+- Mention that CI checks will run automatically, or report the signoff result and the SHA it bound to when the repo gates on signoff.
+- Say what is still blocking the merge, if anything.
 - Offer, without running them unprompted:
   - `gh pr edit --add-reviewer <username>`
   - `gh pr edit --add-label "<label>"`
@@ -283,6 +323,9 @@ Delete the temporary body file afterwards.
 | Repo title config conflicts with gitmoji | Follow the repo config, drop the emoji, and say so in the report. |
 | Two configs disagree (e.g. commitlint vs a PR title action) | The one CI actually runs wins. If both run, satisfy both; if that is impossible, ask the user. |
 | Monorepo package config differs from the repo root | Use the config nearest the changed files. If the change spans packages with different rules, satisfy the repo root config and ask. |
+| Repo requires `signoff` but gh-signoff is not installed | Install it (`gh extension install basecamp/gh-signoff`) or point the user at the repo's setup instructions. Do not leave the PR silently unmergeable. |
+| A check fails during signoff | Write no statuses. Fix the cause, commit, push, then sign off the new SHA. |
+| PR is from a fork and signoff is required | Writing a status needs write access to the head repo, so the signoff has to come from a dispatched workflow. Say so rather than retrying. |
 
 ## Examples
 
