@@ -1,21 +1,29 @@
 name: Validate Skills
 
+# Skill validation runs locally and is attested with gh-signoff, so this
+# workflow no longer triggers on push or pull_request. It stays available
+# for manual runs: Actions > Validate Skills > Run workflow, or
+#   gh workflow run validate-skills.yml --ref <branch> -f check-links=true
 on:
-  push:
-    branches: [main]
-    paths:
-      - "skills/**"
-      - "scripts/validate-skills.ts"
-  pull_request:
-    paths:
-      - "skills/**"
-      - "scripts/validate-skills.ts"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to validate (defaults to the selected ref)
+        required: false
+        type: string
+      check-links:
+        description: Also check that URLs referenced in skills are reachable
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -24,5 +32,5 @@ jobs:
         run: bun run scripts/validate-skills.ts
 
       - name: Validate links in skills
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: ${{ inputs.check-links }}
         run: bun run scripts/validate-skills.ts --check-links
