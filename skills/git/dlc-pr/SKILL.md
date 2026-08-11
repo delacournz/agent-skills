@@ -1,9 +1,9 @@
 ---
 name: dlc-pr
-description: Create a GitHub pull request following project conventions using the gh CLI, with gitmoji conventional commit titles. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, PR template usage, title formatting, draft PRs, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
+description: Create a GitHub pull request following project conventions using the gh CLI, matching any repo-supplied rules for PR titles and descriptions (commitlint, semantic PR title actions, PR templates, contributor docs) and falling back to gitmoji conventional commit titles. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, convention detection, PR template usage, title formatting, draft PRs, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
 metadata:
   author: chris@delacour.co.nz
-  version: "0.2.1"
+  version: "0.3.0"
   category: git
   tags: [git, github, pull-request, gh-cli, workflow]
 license: UNLICENSED
@@ -83,9 +83,60 @@ Only ask the user for what cannot be inferred, and ask everything in a single ro
 
   After a rebase, use `git push --force-with-lease origin HEAD`. Never use plain `--force`.
 
-### 5. Write the PR body to a file
+### 5. Detect the repo's own PR conventions
 
-**If the repo has a PR template, always use it.** It is the repo's stated contract for what a PR description must contain, and reviewers and automation may depend on its sections. Never substitute your own format, and never fall back to the default body below while a template exists.
+**Repo-supplied rules always beat this skill's defaults - for the title and the description alike.** Before writing either, find out what the repo states about them. In a monorepo, check the workspace root of the changed code as well as the repo root; the nearest config to the change wins.
+
+Precedence, highest first:
+
+1. Machine-enforced config (CI fails without it)
+2. Written contributor docs (`CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `docs/`)
+3. The de facto convention in recently merged PRs
+4. The defaults in this skill
+
+Discovery:
+
+```bash
+# title rules
+ls .commitlintrc* commitlint.config.* .czrc .versionrc* release-please-config.json .changeset/config.json .github/semantic.yml 2>/dev/null
+rg -l "semantic-pull-request|pr-title|pr-lint|title-check|commitlint|conventional" .github 2>/dev/null
+rg -n "\"commitlint\"" package.json 2>/dev/null
+
+# rules for both, in prose
+rg -n -i "pull request|pr title|pr description|commit message" CONTRIBUTING.md AGENTS.md CLAUDE.md docs 2>/dev/null
+
+# body rules enforced by bots
+rg -l "dangerfile|Danger|pr-body|body-check|task-list|checklist" .github dangerfile* 2>/dev/null
+
+# de facto convention when nothing is configured
+gh pr list --limit 20 --state merged --json title -q '.[].title'
+```
+
+What each source dictates:
+
+| Source | What to take from it |
+| --- | --- |
+| commitlint config (`.commitlintrc*`, `commitlint.config.*`, `package.json#commitlint`) | `type-enum` (allowed types), `scope-enum` and `scope-empty` (which scopes, whether one is required), `subject-case`, `header-max-length`, `header-pattern` |
+| `amannn/action-semantic-pull-request` in a workflow | `types`, `scopes`, `requireScope`, `subjectPattern`, `validateSingleCommit` |
+| `.github/semantic.yml` | Allowed types, and whether the check applies to the title, the commits, or both |
+| release-please / changesets / semantic-release config | The types that drive versioning - never invent a type outside that set |
+| Contributor docs | Prose rules: prefixes, ticket keys (`ABC-123`), required sections, forbidden phrasing |
+| Danger / body-lint workflows | Sections or strings the description must contain (`Closes #`, a test plan heading, a ticked checklist) |
+| Merged PR titles | The shape to copy when nothing above exists |
+
+Apply what you find literally:
+
+- If the repo restricts types, use only those types, even when a gitmoji type in this skill's table fits better.
+- If the repo's pattern has no room for an emoji (a `subjectPattern`/`header-pattern` anchored on `^type`, or merged titles that never carry one), drop the gitmoji rather than failing the check.
+- If a header max length is configured, respect it over this skill's 72 character guidance.
+- If a scope enum exists, pick a scope from it. If `requireScope`/`scope-empty` demands one, never omit it.
+- If a ticket key is required in the title or body, take it from the branch name or commits, and ask only if it cannot be inferred.
+
+When repo rules and this skill's defaults conflict, follow the repo and say so in the final report.
+
+### 6. Write the PR body to a file
+
+**If the repo has a PR template, always use it.** It is the repo's stated contract for what a PR description must contain, and reviewers and automation may depend on its sections. Never substitute your own format, and never fall back to the default body below while a template exists. Layer any description rules found in step 5 on top of the template - a template and a documented rule are cumulative, not alternatives.
 
 Search for one before writing anything, and use the first match:
 
@@ -107,7 +158,7 @@ When a template is found, read it in full and:
 - Tick the correct change type boxes and complete the checklist items that apply. Leave unticked anything you have not actually verified.
 - Keep the template's own issue reference syntax rather than inventing your own.
 
-Use the default body below **only** when no template exists anywhere in the repo:
+Use the default body below **only** when no template exists anywhere in the repo and step 5 turned up no description rules:
 
 ```markdown
 ## Summary
@@ -143,7 +194,9 @@ Closes #123
 
 Always write the body to a temporary file rather than passing it inline. Inline markdown with newlines, backticks, and checkboxes is fragile in a shell. Use the session scratchpad directory when one is available, otherwise `.git/pr-body.md`.
 
-### 6. Title the PR
+### 7. Title the PR
+
+**If step 5 found title rules, follow them and skip the rest of this section.** The rules below are the fallback for a repo that states nothing.
 
 PR titles are gitmoji conventional commits. The title becomes the squash commit subject on merge, so it has to read well in `git log`.
 
@@ -194,9 +247,9 @@ feat(outpost): show agenda            missing emoji
 ✨ feat(outpost): show agenda (#135)  PR number typed by hand
 ```
 
-Before writing the title, run `gh pr list --limit 20` and confirm the repo actually uses this convention. If it uses something else, follow the repo.
+Before writing the title, confirm against the merged titles collected in step 5 that the repo actually uses this convention. If it uses something else, follow the repo.
 
-### 7. Create the PR
+### 8. Create the PR
 
 ```bash
 gh pr create --title "<title>" --body-file <body-path> --base <base>
@@ -206,9 +259,10 @@ Add `--draft` when the work is incomplete, when the user asks for a draft, or wh
 
 Delete the temporary body file afterwards.
 
-### 8. Report and follow up
+### 9. Report and follow up
 
 - Print the PR URL returned by `gh pr create`.
+- State which convention source shaped the title and the body (repo config file, contributor doc, PR template, or this skill's defaults), and call out anywhere the repo overrode a default.
 - Mention that CI checks will run automatically.
 - Offer, without running them unprompted:
   - `gh pr edit --add-reviewer <username>`
@@ -226,6 +280,9 @@ Delete the temporary body file afterwards.
 | Fork based workflow | Confirm the target repo. Use `gh pr create --repo <upstream> --head <user>:<branch>`. |
 | No `origin` remote | Ask the user for the correct remote name and use it throughout. |
 | Repo has no base branch detected | Fall back to `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`. |
+| Repo title config conflicts with gitmoji | Follow the repo config, drop the emoji, and say so in the report. |
+| Two configs disagree (e.g. commitlint vs a PR title action) | The one CI actually runs wins. If both run, satisfy both; if that is impossible, ask the user. |
+| Monorepo package config differs from the repo root | Use the config nearest the changed files. If the change spans packages with different rules, satisfy the repo root config and ask. |
 
 ## Examples
 
