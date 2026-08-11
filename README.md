@@ -164,3 +164,74 @@ bunx prek install --hook-type pre-commit --hook-type pre-push
 ```
 
 The hooks only run when a `SKILL.md` is staged. In an emergency, bypass with `git commit --no-verify` or `git push --no-verify`. Config lives in [.pre-commit-config.yaml](.pre-commit-config.yaml).
+
+## PR Signoff (local CI)
+
+Instead of a PR fanning out cloud jobs that re-verify work this machine already verified, the checks run locally and [basecamp/gh-signoff](https://github.com/basecamp/gh-signoff) writes the commit statuses that branch protection on `main` requires.
+
+A status binds to a SHA, not a branch. Push another commit and the signoff drops, so it has to run again.
+
+### One-time setup per developer
+
+```bash
+gh extension install basecamp/gh-signoff
+gh auth status                      # must be authenticated with repo write access
+```
+
+### Signing off a PR
+
+```bash
+bun run signoff --dry-run           # print the plan, run nothing, write nothing
+bun run signoff                     # run the checks, write the statuses, post the report
+```
+
+`scripts/signoff.ts` refuses to run on a dirty or unpushed tree, runs each check in the foreground with visible output, and writes statuses only for checks that actually passed. If any check fails it writes nothing at all: fix the failure, commit, push, and run it again against the new SHA.
+
+Flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--dry-run` | Print the plan only |
+| `--only validate` | Run a subset (the umbrella context stays withheld if a required check did not run) |
+| `--skip links` | Skip a check, recorded as skipped in the report |
+| `--no-comment` | Do not post or update the PR report comment |
+| `--runner "<name>"` | Override the runner label in the report |
+
+The report comment names both the actor (the GitHub token that wrote the statuses) and the runner (who or what actually ran the checks), so an agent-run signoff is never mistaken for a human watching the suite.
+
+### Checks and required contexts
+
+| Check | Context | Command |
+| --- | --- | --- |
+| `validate` | `signoff/validate` | `bun run scripts/validate-skills.ts` |
+| `links` | `signoff/links` | `bun run scripts/validate-skills.ts --check-links` |
+| umbrella | `signoff` | written last, only when every check above passed |
+
+`main` requires all three. Only always-on checks belong in the required list: GitHub's required contexts are static per branch, so a path-gated context that never arrives would leave a PR unmergeable forever. Path-gated checks block transitively through the withheld umbrella instead.
+
+### Adding a new check
+
+1. Add an entry to `CHECKS` in [scripts/signoff.ts](scripts/signoff.ts) with its `id`, `description` and `cmd`. Add `paths` only if it should be path-gated.
+2. If it is always-on and should block merges, add its `id` to `REQUIRED` in the same file.
+3. Add the context to branch protection (repo admin required):
+
+   ```bash
+   gh signoff install "" validate links <new-id>
+   ```
+
+   Every context has to be passed in one call: `gh signoff install` replaces the required-context list rather than appending to it, and the leading `""` is what keeps the bare `signoff` umbrella required.
+
+### Administering branch protection
+
+```bash
+gh signoff check                    # is signoff required on the default branch?
+gh signoff status                   # what is signed off for the current commit?
+gh signoff uninstall                # remove the requirement
+```
+
+Current protection on `main` can be inspected with:
+
+```bash
+gh api repos/{owner}/{repo}/branches/main/protection \
+  --jq '.required_status_checks.contexts'
+```

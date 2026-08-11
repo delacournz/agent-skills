@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "validate": "bun run scripts/validate-skills.ts",
+    "signoff": "bun run scripts/signoff.ts",
     "prepare": "prek install --hook-type pre-commit --hook-type pre-push"
   },
   "devDependencies": {
