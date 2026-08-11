@@ -1,37 +1,12 @@
----
-name: dlc-signoff-pr
-description: Sign off a pull request with basecamp/gh-signoff by running the repo's CI checks locally and writing the `signoff` commit statuses branch protection requires. Failing checks are fixed, committed and pushed, then the whole run starts over on the new SHA. Enforces the honesty rules (clean tree, pushed HEAD, only sign off what actually ran, report who ran it). Use when asked to "sign off", "sign off the PR", "signoff", "run signoff", "make the PR mergeable", "write the signoff statuses", "green the checks", or when a PR is blocked on a missing `signoff` status. Also covers first-time setup (`gh extension install basecamp/gh-signoff`, `gh signoff install`) and the break-glass escape hatches.
-license: UNLICENSED
-allowed-tools: Read, Bash(*), Glob, Grep
-metadata:
-  author: chris@delacour.co.nz
-  version: "0.1.0"
-  category: workflow
-  tags: [signoff, gh-signoff, ci, pull-request, github, local-ci, branch-protection]
-  argument-hint: "[--dry-run] [--only ctx,ctx] [--skip ctx,ctx]"
----
+# Reference: Run a Signoff
 
-# Sign Off a Pull Request
-
-Local CI. Instead of a PR fanning out cloud jobs that re-verify work the authoring machine already verified, the checks run here and [`basecamp/gh-signoff`](https://github.com/basecamp/gh-signoff) writes commit statuses (`POST /repos/:owner/:repo/statuses/<sha>`, context `signoff` or `signoff/<check>`) that branch protection requires.
-
-The gate is only as honest as the run behind it. `gh signoff` writes a green status without running anything, so the whole value of this skill is the procedure around the command: verify the tree, run the checks the diff actually needs, write statuses only for checks that passed, and say in writing who ran them and what was skipped.
+The full procedure for signing off the current branch / PR. Follow every step in order.
 
 **A status binds to a SHA, not a branch.** Push another commit and the signoff drops, and this has to run again.
 
-## When to Use
+If the repo has never been set up for gh-signoff (no `signoff` context in branch protection, `gh signoff install` never run), stop and follow [setup.md](./setup.md) first.
 
-- User says "sign off", "sign off the PR", "signoff", "run signoff", or "gh signoff"
-- A PR is blocked on a missing or red `signoff` / `signoff/<check>` status
-- User asks to make a PR mergeable, or asks why the checks panel is empty
-- User asks to set up gh-signoff on a repo, or to configure required contexts
-- After finishing work on a branch that already has an open PR, when the user asks for the PR to be ready to merge
-
-Do **not** use this skill to skip verification. If the user wants a green status without running the checks, see [Break-glass](#break-glass), which requires explicit authorization.
-
-## Rules / Steps
-
-### 1. Find the repo's signoff entrypoint
+## 1. Find the repo's signoff entrypoint
 
 Before touching `gh signoff` directly, look for a wrapper the repo already owns:
 
@@ -52,7 +27,7 @@ Read the wrapper's source before the first run in an unfamiliar repo, then follo
 
 If there is no wrapper, continue with steps 2 to 5 and do the work by hand.
 
-### 2. Preflight (every condition is a hard stop)
+## 2. Preflight (every condition is a hard stop)
 
 ```bash
 git rev-parse --git-dir                          # inside a repo
@@ -61,7 +36,7 @@ git rev-parse HEAD                               # the SHA being signed off
 git rev-parse @{push}                            # MUST equal HEAD
 gh pr view --json number,baseRefName,state       # MUST exist and be OPEN
 gh api user --jq .login                          # gh MUST be authenticated
-gh extension list | grep gh-signoff              # else: gh extension install basecamp/gh-signoff
+gh extension list | grep gh-signoff              # else: see setup.md
 ```
 
 Why each one matters:
@@ -70,7 +45,7 @@ Why each one matters:
 - **Unpushed HEAD:** the status binds to a remote SHA. GitHub rejects a status for a commit it has never seen.
 - **No open PR:** there is nothing to report to, and nothing being gated.
 
-### 3. Plan the checks from the diff, not from memory
+## 3. Plan the checks from the diff, not from memory
 
 ```bash
 BASE=$(gh pr view --json baseRefName --jq .baseRefName)
@@ -88,7 +63,7 @@ If the repo defines this mapping in a file (for example `scripts/signoff-checks.
 
 State the plan before running it: which checks run, which are skipped, and why each skip is legitimate.
 
-### 4. Run the checks and record the outcome
+## 4. Run the checks and record the outcome
 
 Run each applicable check with its real command, in the foreground, and capture pass/fail plus duration. Do not run them in a way that hides output.
 
@@ -99,12 +74,12 @@ Rules that make the result trustworthy:
 - Never pass `--no-verify`, never disable a lint rule, and never narrow a suite to make it green.
 - If any check fails: **write no statuses at all**, then go fix it. A partial signoff on a failing PR is worse than no signoff.
 
-### 4b. A check failed: fix it, commit, push, start over
+## 4b. A check failed: fix it, commit, push, start over
 
 Signing off is not a report on the state of the branch, it is the job of getting the branch to a state worth signing off. A red check is work to do, not a result to hand back.
 
 1. **Read the actual failure.** Re-run the single failing check on its own for clean output. Diagnose the root cause, do not pattern-match on the error string.
-2. **Fix the source.** Change the code (or the test, when the test is the thing that is wrong). Never make a check pass by weakening it: no skipped tests, no loosened types, no `biome-ignore` added to silence a real finding, no `--no-verify`, no removing the check from the plan.
+2. **Fix the source.** Change the code (or the test, when the test is the thing that is wrong). Never make a check pass by weakening it: no skipped tests, no loosened types, no `biome-ignore` added to silence a real finding, no `--no-verify`.
 3. **Re-run that check** until it passes, then re-run **every** check in the plan. A fix in one place breaks another often enough that a targeted re-run is not evidence.
 4. **Commit the fix** on the same branch, with a gitmoji conventional message describing the fix (not "fix signoff"):
 
@@ -129,7 +104,7 @@ Loop guard: after **three** full attempts on the same check, stop and report. Al
 
 When you stop, report the failing check, the diagnosis, what you tried, and what you need from the user. Leave the PR unsigned.
 
-### 5. Write the statuses, sub-contexts first, umbrella last
+## 5. Write the statuses, sub-contexts first, umbrella last
 
 ```bash
 SHA=$(git rev-parse HEAD)
@@ -145,7 +120,7 @@ Non-negotiable details:
 - **Umbrella last, and only if every write above succeeded.** The bare `signoff` context is the one that unblocks the merge. Writing it over a sub-context write that failed produces a green panel with a required status quietly absent, which is invisible in a way a red mark is not. If any write failed, withhold the umbrella and say which contexts are missing.
 - **Withhold the umbrella unless something ran and nothing failed.** A plan that skipped everything (a filter typo, for instance) must not sign off a PR nobody verified.
 
-### 6. Post the report and tell the truth about the runner
+## 6. Post the report and tell the truth about the runner
 
 GitHub records the status creator and stamps `"<login> signed off"`, which names the token, not the hands. When an agent runs the checks with a human's `gh` credentials, the PR would otherwise read as though a person watched the suite.
 
@@ -160,7 +135,7 @@ If the repo's wrapper posts this comment, do not post a second one.
 
 Finally, report back to the user: the SHA, the PR number, what ran, what was skipped and why, and what is still blocking the merge if anything is.
 
-### Edge Cases
+## Edge Cases
 
 **A check genuinely cannot run on this machine.** Sibling worktrees colliding on a dev-server port, a missing platform toolchain, no Docker. Do not skip it silently. Dispatch the workflow that still runs it, then re-run signoff excluding it once green:
 
@@ -175,19 +150,9 @@ bun run signoff -- --skip e2e-folio
 
 **Fork PRs.** Writing a status needs write access to the head repo. A signoff run from a fork will fail at the status write, so the check has to come from a dispatched workflow instead.
 
-**Repo not set up yet.** One-off, per repo, and needs admin on the branch:
+**`gh signoff` not installed, or the repo has no required contexts.** That is setup work, not signoff work. Follow [setup.md](./setup.md).
 
-```bash
-gh extension install basecamp/gh-signoff
-gh signoff install                                        # require the bare `signoff` context
-gh signoff install typecheck check test build             # plus the always-on sub-contexts
-gh signoff install --branch main typecheck check test     # a second protected branch
-gh signoff status                                         # what is currently signed off
-```
-
-Only put always-on contexts in the required list. Path-gated ones block transitively through the withheld umbrella.
-
-### Break-glass
+## Break-glass
 
 Bare `gh signoff` (no wrapper, no checks) writes the statuses without running anything. It exists for a machine that genuinely cannot run a suite. **An agent must never reach for it on its own initiative.** Use it only when the user explicitly asks for an unverified signoff, and when you do, say plainly in the PR comment that no checks were run.
 
