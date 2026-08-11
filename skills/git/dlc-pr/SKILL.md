@@ -1,9 +1,9 @@
 ---
 name: dlc-pr
-description: Create a GitHub pull request following project conventions using the gh CLI. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, PR template usage, draft PRs, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
+description: Create a GitHub pull request following project conventions using the gh CLI, with gitmoji conventional commit titles. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, PR template usage, title formatting, draft PRs, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
 metadata:
   author: chris@delacour.co.nz
-  version: "0.1.0"
+  version: "0.2.0"
   category: git
   tags: [git, github, pull-request, gh-cli, workflow]
 license: UNLICENSED
@@ -131,13 +131,56 @@ Always write the body to a temporary file rather than passing it inline. Inline 
 
 ### 6. Title the PR
 
-Match the repository's existing PR titles (`gh pr list --limit 20` shows the convention). If the repo uses gitmoji conventional commits, follow that format:
+PR titles are gitmoji conventional commits. The title becomes the squash commit subject on merge, so it has to read well in `git log`.
 
 ```
-✨ feat(auth): add passwordless email sign in
+<emoji> <type>(<scope>): <description>
 ```
 
-Keep the title under 72 characters, imperative mood, no trailing period.
+Rules:
+
+1. **Always lead with the emoji.** No exceptions, no bare `feat:` titles.
+2. **The emoji must match the type.** Use the table below, never a mismatched pair like `📝 fix(...)`.
+3. **Scope is the app or package the change belongs to**, lowercase, singular, matching the directory name (`outpost`, `nimbus`, `web`, `ci`, `jobs`, `infra`, `release`, `brand`, `tauri`). Omit the scope only when the change genuinely spans the whole repo.
+4. **Description is lowercase, imperative, and says what the change does for a user or developer**, not which files moved. Prefer "retire rows one by one as each thread is marked done" over "update thread list logic".
+5. **No trailing period.** Aim for under 72 characters, but a longer title that stays specific beats a short vague one.
+6. **Do not type the PR number.** GitHub appends `(#123)` when the PR is squash merged.
+
+| Type | Emoji | Use for |
+| --- | --- | --- |
+| `feat` | ✨ | New capability |
+| `fix` | 🐛 | Broken behaviour corrected |
+| `docs` | 📝 | Documentation and copy |
+| `style` | 🎨 | Visual and formatting changes with no behaviour change |
+| `refactor` | ♻️ | Restructuring with no behaviour change |
+| `perf` | ⚡️ | Performance work |
+| `test` | ✅ | Tests |
+| `chore` | 🔧 | Tooling, config, maintenance |
+| `ci` | 👷 | CI pipeline changes |
+| `build` | 📦 | Build system and packaging |
+| `revert` | ⏪ | Reverting a previous change |
+
+Titles that follow the pattern:
+
+```
+✨ feat(outpost): show today's agenda in the menu-bar tray
+🐛 fix(infra): pin railpack to the node provider so builds still get bun
+🎨 style(outpost): distinguish the selected row from unread rows
+♻️ refactor(rust): share one cargo workspace across the tauri apps
+🔧 chore(ci): cut desktop releases from release/* branches instead of main
+```
+
+Titles that do not:
+
+```
+feat(outpost): show agenda            missing emoji
+📝 fix(settings): update disclaimer   emoji does not match the type
+✨ feat: update files                 no scope, says nothing
+✨ feat(outpost): Show Agenda.        capitalised, trailing period
+✨ feat(outpost): show agenda (#135)  PR number typed by hand
+```
+
+Before writing the title, run `gh pr list --limit 20` and confirm the repo actually uses this convention. If it uses something else, follow the repo.
 
 ### 7. Create the PR
 
