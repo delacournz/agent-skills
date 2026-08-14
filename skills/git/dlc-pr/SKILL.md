@@ -3,7 +3,7 @@ name: dlc-pr
 description: Create a GitHub pull request following project conventions using the gh CLI, matching any repo-supplied rules for PR titles and descriptions (commitlint, semantic PR title actions, PR templates, contributor docs) and falling back to gitmoji conventional commit titles. Use when the user asks to create a PR, open a pull request, raise a PR, submit changes for review, or ship a branch. Handles prerequisite checks, branch and commit hygiene, issue linking, convention detection, PR template usage, title formatting, draft PRs, signing off the PR when the repo gates on gh-signoff, and post-creation follow-up. Triggers on "create a PR", "open a pull request", "/pr", "submit for review", "push and PR".
 metadata:
   author: chris@delacour.co.nz
-  version: "0.4.0"
+  version: "0.5.0"
   category: git
   tags: [git, github, pull-request, gh-cli, workflow]
 license: UNLICENSED
@@ -91,7 +91,7 @@ Precedence, highest first:
 
 1. Machine-enforced config (CI fails without it)
 2. Written contributor docs (`CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `docs/`)
-3. The de facto convention in recently merged PRs
+3. The de facto convention across the base branch's history - a **counted majority over at least 100 titles**, never the most recent handful
 4. The defaults in this skill
 
 Discovery:
@@ -108,9 +108,17 @@ rg -n -i "pull request|pr title|pr description|commit message" CONTRIBUTING.md A
 # body rules enforced by bots
 rg -l "dangerfile|Danger|pr-body|body-check|task-list|checklist" .github dangerfile* 2>/dev/null
 
-# de facto convention when nothing is configured
-gh pr list --limit 20 --state merged --json title -q '.[].title'
+# de facto convention when nothing is configured - sample DEEP, and COUNT
+# (squash-merge repos put the merged PR title straight into the base branch log,
+#  so git log is both cheaper and deeper than the API)
+GITMOJI='^(✨|🐛|📝|🎨|♻️|⚡️|✅|🔧|👷|📦|⏪|🚀|🚨|💚|⬆️|⬇️|🔥|🚧|🩹|💄|🔒️)'
+git log origin/<base> --format='%s' | head -100 > /tmp/pr-titles.txt
+grep -cE "$GITMOJI" /tmp/pr-titles.txt   # gitmoji count out of the last 100
+wc -l < /tmp/pr-titles.txt               # denominator
+cat /tmp/pr-titles.txt                   # read them, do not just count
 ```
+
+**A sample of 20 is not evidence.** A repo that has used gitmoji for two years can easily show a dozen consecutive prose titles at the top of the log - one contributor, one sprint, one bad week - and a shallow sample reads that run as the house style. Count over 100 and use the ratio, not the first screenful.
 
 What each source dictates:
 
@@ -122,12 +130,12 @@ What each source dictates:
 | release-please / changesets / semantic-release config | The types that drive versioning - never invent a type outside that set |
 | Contributor docs | Prose rules: prefixes, ticket keys (`ABC-123`), required sections, forbidden phrasing |
 | Danger / body-lint workflows | Sections or strings the description must contain (`Closes #`, a test plan heading, a ticked checklist) |
-| Merged PR titles | The shape to copy when nothing above exists |
+| Merged PR titles | The shape to copy when nothing above exists **and** a counted majority of 100 agrees on it |
 
 Apply what you find literally:
 
 - If the repo restricts types, use only those types, even when a gitmoji type in this skill's table fits better.
-- If the repo's pattern has no room for an emoji (a `subjectPattern`/`header-pattern` anchored on `^type`, or merged titles that never carry one), drop the gitmoji rather than failing the check.
+- Drop the gitmoji **only** when a machine-enforced pattern has no room for it (a `subjectPattern`/`header-pattern` anchored on `^type`), or when *fewer than 20 of 100* sampled titles carry one. A recent run of bare titles is not a reason - see the threshold in step 7.
 - If a header max length is configured, respect it over this skill's 72 character guidance.
 - If a scope enum exists, pick a scope from it. If `requireScope`/`scope-empty` demands one, never omit it.
 - If a ticket key is required in the title or body, take it from the branch name or commits, and ask only if it cannot be inferred.
@@ -247,7 +255,22 @@ feat(outpost): show agenda            missing emoji
 ✨ feat(outpost): show agenda (#135)  PR number typed by hand
 ```
 
-Before writing the title, confirm against the merged titles collected in step 5 that the repo actually uses this convention. If it uses something else, follow the repo.
+#### Before writing the title, apply the threshold
+
+Gitmoji is the **default**, and the bar for abandoning it is deliberately high. Using the 100-title count from step 5:
+
+| Gitmoji share of 100 | Do this |
+| --- | --- |
+| No machine-enforced rule, **≥ 20** carry a gitmoji | Use gitmoji. The repo's convention is gitmoji; the bare titles are the exceptions. |
+| No machine-enforced rule, **< 20** carry a gitmoji | Follow the repo's shape instead, and say so in the report. |
+| A machine-enforced pattern exists | It wins outright, whatever the count says. |
+
+Two failure modes this threshold exists to prevent, both of which have happened:
+
+- **Sampling the top of the log.** A 15-title sample landed entirely inside a 12-PR run of prose titles in a repo where **84 of the last 100** were gitmoji. The conclusion "this repo uses prose" was drawn from a window smaller than the exception, and it produced a PR title the author immediately rejected.
+- **Treating a recent run as a convention change.** Conventions change by someone writing them down, not by drift. Unless a doc or config says the repo moved off gitmoji, a run of non-conforming titles means those PRs skipped the convention - copying them propagates the mistake.
+
+When in doubt, use gitmoji: a title that conforms in a repo that has stopped caring costs nothing, while a bare title in a repo that still cares is the one the reviewer asks you to change.
 
 ### 8. Create the PR
 
@@ -258,6 +281,28 @@ gh pr create --title "<title>" --body-file <body-path> --base <base>
 Add `--draft` when the work is incomplete, when the user asks for a draft, or when CI is expected to fail on the first push.
 
 Delete the temporary body file afterwards.
+
+**Read the title back and check it against the convention before moving on.** A title is cheap to fix now and awkward to fix after review starts, and on a squash-merge repo it is the subject that lands in the base branch forever.
+
+```bash
+gh pr view <number> --json title -q .title
+```
+
+Confirm it leads with the right emoji for its type, carries a scope from the repo's vocabulary, is lowercase and imperative, and has no trailing period or hand-typed PR number.
+
+To correct it:
+
+```bash
+gh pr edit <number> --title "<title>"
+```
+
+If that fails, use the REST endpoint - `gh pr edit` goes through GraphQL and **aborts on unrelated field errors** (a repo with Projects-classic enabled returns a deprecation error on `projectCards` and the title is left unchanged, while the command still prints something that reads like output):
+
+```bash
+gh api -X PATCH repos/{owner}/{repo}/pulls/<number> -f title='<title>' --jq .title
+```
+
+Either way, verify with `gh pr view` afterwards rather than trusting the command's exit. A title edit does not move the SHA, so any signoff or CI status on the PR survives it.
 
 ### 9. Sign off the PR when the repo gates on signoff
 
@@ -321,6 +366,8 @@ If the repo does not gate on signoff, skip this step entirely and let its normal
 | No `origin` remote | Ask the user for the correct remote name and use it throughout. |
 | Repo has no base branch detected | Fall back to `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`. |
 | Repo title config conflicts with gitmoji | Follow the repo config, drop the emoji, and say so in the report. |
+| Recent merged titles do not use gitmoji | Count over 100, not 20. Below 20 gitmoji per 100 follow the repo; at or above that, the run is exceptions and gitmoji stands. See the threshold in step 7. |
+| `gh pr edit --title` errors on Projects (classic) | The GraphQL mutation aborts on the unrelated `projectCards` deprecation and leaves the title unchanged. Use `gh api -X PATCH repos/{owner}/{repo}/pulls/<n> -f title='...'` and verify with `gh pr view`. |
 | Two configs disagree (e.g. commitlint vs a PR title action) | The one CI actually runs wins. If both run, satisfy both; if that is impossible, ask the user. |
 | Monorepo package config differs from the repo root | Use the config nearest the changed files. If the change spans packages with different rules, satisfy the repo root config and ask. |
 | Repo requires `signoff` but gh-signoff is not installed | Install it (`gh extension install basecamp/gh-signoff`) or point the user at the repo's setup instructions. Do not leave the PR silently unmergeable. |
