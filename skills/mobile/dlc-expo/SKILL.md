@@ -47,7 +47,7 @@ High-level outline:
 
 ## Component Library Choice
 
-Ask the user which React Native component library to use. Use the harness's question tool (`AskUserQuestion` in Claude Code) when available. Exactly one library per app.
+Ask the user which React Native component library to use. Use the agent's structured question tool when one is available. Exactly one library per app.
 
 | Option | Model | Reference |
 | --- | --- | --- |
