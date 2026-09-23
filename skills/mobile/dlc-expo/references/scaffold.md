@@ -4,13 +4,14 @@ Follow these steps in order when creating a new Expo app via the `dlc-expo` skil
 
 ## Steps
 
-1. Before running any commands, collect the following from the user. Do not proceed until all six are confirmed:
+1. Before running any commands, collect the following from the user. Do not proceed until all seven are confirmed:
    - **App name / directory name** (e.g. `my-app`). Used for the folder, `expo.name`, `expo.slug`, and `expo.scheme`.
    - **iOS bundle identifier** (reverse-DNS, e.g. `com.acme.myapp`). Used for `expo.ios.bundleIdentifier`.
    - **Android package name** (reverse-DNS, e.g. `com.acme.myapp`). Used for `expo.android.package`.
    - **Bundler port** (default `8081`). Used in the `dev`, `android`, and `ios` scripts in `package.json`.
    - Parent directory to scaffold into (default: current working directory).
-   - **Set up EAS Workflows?** (yes/no, default `no`). If yes, also collect the iOS App Store Connect App ID and Apple Developer Team ID up front (used by [eas-workflows.md](./eas-workflows.md) step 1). Defer the actual EAS setup until after the base scaffold (and any Uniwind/HeroUI add-ons) — see step 15.
+   - **Component library?** (Delacour UI / HeroUI Native / none, default `none`). Any choice other than `none` implies Uniwind (step 14). Ask per the "Component Library Choice" section of [../SKILL.md](../SKILL.md). Defer the install until after Uniwind — see step 15.
+   - **Set up EAS Workflows?** (yes/no, default `no`). If yes, also collect the iOS App Store Connect App ID and Apple Developer Team ID up front (used by [eas-workflows.md](./eas-workflows.md) step 1). Defer the actual EAS setup until after the base scaffold (and any Uniwind / component library add-ons) — see step 16.
 
    Ask the user these up front. If the user provides only an app name, suggest `com.<user>.<appname>` defaults for both IDs but still confirm before writing them. If the user does not specify a port, use `8081`.
 
@@ -191,6 +192,6 @@ Follow these steps in order when creating a new Expo app via the `dlc-expo` skil
     - The CSS entry file lives at `src/styles/global.css` (not the project root).
     - Import it from `src/app/_layout.tsx`, **not** `index.ts` — importing from the registered root entry breaks hot reload per the Uniwind docs.
 
-15. (Optional, requires step 14) If the user also wants the HeroUI Native component library, follow [./heroui-native.md](./heroui-native.md) after Uniwind is set up. The final step of `uniwind.md` already prompts the user to chain into this — only run it manually if the user explicitly asks for HeroUI without going through `uniwind.md` first.
+15. (Optional, requires step 14) If the user chose a component library in step 1, follow the matching reference after Uniwind is set up: [./delacour-ui.md](./delacour-ui.md) for Delacour UI, or [./heroui-native.md](./heroui-native.md) for HeroUI Native. The final step of `uniwind.md` chains into this — if the choice was not collected in step 1, it asks then.
 
-16. (Optional, independent) If the user opted into EAS Workflows in step 1, follow [./eas-workflows.md](./eas-workflows.md) after the base scaffold (and any Uniwind/HeroUI add-ons) complete. It installs `eas.json`, copies four parameterized workflow YAMLs into `.eas/workflows/`, and walks through the `working_directory` adjustment for standalone vs. monorepo layouts. Independent of Uniwind/HeroUI — runs on any Expo app produced by this skill.
+16. (Optional, independent) If the user opted into EAS Workflows in step 1, follow [./eas-workflows.md](./eas-workflows.md) after the base scaffold (and any Uniwind / component library add-ons) complete. It installs `eas.json`, copies four parameterized workflow YAMLs into `.eas/workflows/`, and walks through the `working_directory` adjustment for standalone vs. monorepo layouts. Independent of Uniwind / component library — runs on any Expo app produced by this skill.
