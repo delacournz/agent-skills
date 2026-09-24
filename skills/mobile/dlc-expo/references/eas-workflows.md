@@ -1,6 +1,6 @@
 # EAS Workflows Setup (detailed procedure)
 
-Optional add-on for the `dlc-expo` skill. Wires up Expo's first-party CI/CD primitive — EAS Workflows — for native builds, OTA updates, and store submissions. Independent of Uniwind / HeroUI; can be applied to any Expo app produced by this skill (or a comparable layout). Do not skip steps and do not paraphrase commands or code snippets, copy them as written.
+Optional add-on for the `dlc-expo` skill. Wires up Expo's first-party CI/CD primitive, EAS Workflows, for native builds, OTA updates, and store submissions. Independent of Uniwind / component library; can be applied to any Expo app produced by this skill (or a comparable layout). Do not skip steps and do not paraphrase commands or code snippets, copy them as written.
 
 Source: <https://docs.expo.dev/eas/workflows/get-started/>
 

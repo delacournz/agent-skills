@@ -176,11 +176,14 @@ Source: https://docs.uniwind.dev/quickstart
    }
    ```
 
-9. **(Optional) HeroUI Native.** Now that Uniwind is wired up, ask the user if they also want to install the HeroUI Native component library. If yes, follow [./heroui-native.md](./heroui-native.md). If no, you are done.
+9. **(Optional) Component library.** Now that Uniwind is wired up, install a component library. If the user already chose one (scaffold step 1), use it; otherwise ask per the "Component Library Choice" section of [../SKILL.md](../SKILL.md):
+   - **Delacour UI** → follow [./delacour-ui.md](./delacour-ui.md).
+   - **HeroUI Native** → follow [./heroui-native.md](./heroui-native.md).
+   - **None** → you are done.
 
 ## Reference
 
 - Uniwind Quickstart: https://docs.uniwind.dev/quickstart
 - Uniwind docs index: https://docs.uniwind.dev/llms.txt
 - Monorepos & `@source`: https://docs.uniwind.dev/monorepos
-- HeroUI Native (optional next step): [./heroui-native.md](./heroui-native.md)
+- Component library (optional next step): [./delacour-ui.md](./delacour-ui.md) or [./heroui-native.md](./heroui-native.md)
