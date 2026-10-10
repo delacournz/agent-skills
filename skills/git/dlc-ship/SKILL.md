@@ -190,7 +190,7 @@ commits:
   📦 build(deps): bump jose to 5.9.0
   ✨ feat(auth): refresh token before expiry window
 checks: bun run lint, bun run typecheck, bun test (all passed)
-PR: https://github.com/<owner>/<repo>/pull/<n>
+PR: https://github.com/{owner}/{repo}/pull/{n}
 ```
 
 The dependency bump was split from the feature, and the test stayed with the code it covers.
