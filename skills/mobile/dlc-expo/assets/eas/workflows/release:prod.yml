@@ -6,25 +6,74 @@ defaults:
   run:
     working_directory: <WORKING_DIRECTORY>
 
+on:
+  push:
+    branches:
+      - release/app/*
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        required: false
+        description: "Version to build, x.y.z. Defaults to the release/app/x.y.z branch name."
+      force_native:
+        type: boolean
+        required: false
+        default: false
+        description: "Build and submit both platforms even when the fingerprint already has a binary."
+
 jobs:
-  # Extract version from branch name (e.g. release/app/1.0.0 -> 1.0.0)
+  # `${{ inputs.version }}` and `${{ github.ref_name }}` render as the literal
+  # string "undefined" when their context is absent — a push event carries no
+  # `inputs`, and `eas workflow:run` carries no ref. `[ -n "$VAR" ]` reads those
+  # four letters as a value. Both are normalised with a `case` before anything
+  # tests them.
+  #
+  # `case` rather than `[ … ] && VERSION=""`: the step runs under
+  # `/bin/bash -eo pipefail`, where a bare test-and-assign whose test is false
+  # makes the list return non-zero.
+  #
+  # `native` is the forced-build switch. A push whose head commit message carries
+  # `[native]` — the PR title, under squash merge — or a manual run with
+  # `-F force_native=true` builds and submits both platforms even when the
+  # fingerprint already has a binary, instead of shipping an OTA update to it.
+  # It is resolved here, in shell, rather than inline in each `if:` because
+  # `github.commit_message` is absent on `workflow_dispatch` and `inputs.force_native`
+  # is absent on a push, and both render as "undefined".
   extract_version:
     name: Extract Version
     outputs:
       version: ${{ steps.parse.outputs.version }}
+      native: ${{ steps.mode.outputs.native }}
     steps:
       - id: parse
-        name: Parse version from branch
+        name: Parse version
         working_directory: .
         run: |
-          REF_NAME="${{ github.ref_name }}"
-          VERSION="${REF_NAME##release/app/}"
+          VERSION="${{ inputs.version }}"
+          case "$VERSION" in undefined|null) VERSION="" ;; esac
+          if [ -z "$VERSION" ]; then
+            REF_NAME="${{ github.ref_name }}"
+            case "$REF_NAME" in
+              release/app/*) VERSION="${REF_NAME##release/app/}" ;;
+            esac
+          fi
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "ERROR: Invalid version format: $VERSION (expected x.y.z)"
+            echo "ERROR: Invalid version format: '$VERSION' (expected x.y.z)"
+            echo "Pass one explicitly with -F version=x.y.z, or push to release/app/x.y.z."
             exit 1
           fi
           echo "Version: $VERSION"
           set-output version "$VERSION"
+      - id: mode
+        name: Resolve build mode
+        working_directory: .
+        run: |
+          NATIVE=false
+          case "${{ inputs.force_native }}" in true) NATIVE=true ;; esac
+          case "${{ github.commit_message }}" in *"[native]"*) NATIVE=true ;; esac
+          echo "Force native build: $NATIVE"
+          set-output native "$NATIVE"
 
   # Fingerprint the build
   fingerprint:
@@ -32,12 +81,33 @@ jobs:
     type: fingerprint
     needs: [extract_version]
 
+  # An update is only reachable if the `production` channel the binaries ask for
+  # has a branch pointed at it. A channel is created by the first build and never
+  # linked by `eas update`, so every update can sit behind an unlinked channel
+  # while the store binary keeps its embedded bundle. Both publish jobs need this,
+  # so an unlinked channel fails the run instead of publishing to nowhere. Custom
+  # jobs run `eas` as the workflow's robot user, so no token is passed here.
+  #
+  # A custom job starts from an empty VM: without `eas/checkout` the script is not
+  # there (`Module not found "scripts/eas-check-channel.ts"`), and without
+  # `eas/install_node_modules` `eas channel:view` cannot evaluate `app.config.ts`
+  # when it imports anything at runtime.
+  check_update_channel:
+    name: Check update channel
+    needs: [extract_version]
+    steps:
+      - uses: eas/checkout
+      - uses: eas/install_node_modules
+      - name: Verify the production channel has a branch
+        run: bun scripts/eas-check-channel.ts production
+
   # Check for existing Android build
   get_android_build:
     name: Check for existing android build
     needs: [fingerprint]
     type: get-build
     params:
+      platform: android
       fingerprint_hash: ${{ needs.fingerprint.outputs.android_fingerprint_hash }}
       profile: production
 
@@ -47,14 +117,15 @@ jobs:
     needs: [fingerprint]
     type: get-build
     params:
+      platform: ios
       fingerprint_hash: ${{ needs.fingerprint.outputs.ios_fingerprint_hash }}
       profile: production
 
-  # If no existing Android build, build it
+  # If no existing Android build, or the run is forced native, build it
   build_android:
     name: Build Android
     needs: [get_android_build, extract_version]
-    if: ${{ !needs.get_android_build.outputs.build_id }}
+    if: ${{ !needs.get_android_build.outputs.build_id || needs.extract_version.outputs.native == 'true' }}
     type: build
     env:
       APP_VERSION: ${{ needs.extract_version.outputs.version }}
@@ -62,11 +133,11 @@ jobs:
       platform: android
       profile: production
 
-  # If no existing iOS build, build it
+  # If no existing iOS build, or the run is forced native, build it
   build_ios:
     name: Build iOS
     needs: [get_ios_build, extract_version]
-    if: ${{ !needs.get_ios_build.outputs.build_id }}
+    if: ${{ !needs.get_ios_build.outputs.build_id || needs.extract_version.outputs.native == 'true' }}
     type: build
     env:
       APP_VERSION: ${{ needs.extract_version.outputs.version }}
@@ -90,70 +161,101 @@ jobs:
     params:
       build_id: ${{ needs.build_ios.outputs.build_id }}
 
-  # If there is an existing Android build, we want to create an OTA update for it.
+  # If there is an existing Android build and the run is not forced native, ship an OTA update to it.
   publish_android_update:
     name: Publish Android update
-    needs: [get_android_build]
-    if: ${{ needs.get_android_build.outputs.build_id }}
+    needs: [get_android_build, check_update_channel, extract_version]
+    if: ${{ needs.get_android_build.outputs.build_id && needs.extract_version.outputs.native != 'true' }}
     type: update
     params:
       branch: production
       platform: android
 
-  # If there is an existing iOS build, we want to create an OTA update for it.
+  # If there is an existing iOS build and the run is not forced native, ship an OTA update to it.
   publish_ios_update:
     name: Publish iOS update
-    needs: [get_ios_build]
-    if: ${{ needs.get_ios_build.outputs.build_id }}
+    needs: [get_ios_build, check_update_channel, extract_version]
+    if: ${{ needs.get_ios_build.outputs.build_id && needs.extract_version.outputs.native != 'true' }}
     type: update
     params:
       branch: production
       platform: ios
 
-  # # Tag Android native build
-  # tag_android_build:
-  #   name: Tag Android Build
-  #   needs: [build_android]
-  #   if: ${{ needs.build_android.outputs.build_id }}
-  #   type: custom
-  #   env:
-  #     PUSH_GIT_TAG: "true"
-  #   steps:
-  #     - name: Create and push tag
-  #       run: bun scripts/tag-build.ts android ${{ needs.build_android.outputs.build_id }}
+  # Every production binary and every OTA update is tagged on GitHub, on the
+  # commit it came from — `scripts/eas-tag.ts` has the naming. `needs` alone
+  # gates each one: a skipped build or publish skips its tag, so a forced-native
+  # run tags only builds and an OTA run only updates.
+  #
+  # A tag job opens with `eas/checkout` and nothing else. The script writes
+  # through the GitHub API with `GITHUB_TAG_TOKEN`, an EAS secret in the
+  # `production` environment — the checkout carries no push credentials — and
+  # it imports nothing, so the job skips `eas/install_node_modules`.
+  #
+  # An update is tagged for the binary it lands on, which is `get_*_build`'s
+  # output rather than anything the publish job reports. The outputs travel as
+  # `env` rather than being spliced into `run`, so `updates_json` — a commit
+  # message and all — never meets a shell parser.
 
-  # # Tag iOS native build
-  # tag_ios_build:
-  #   name: Tag iOS Build
-  #   needs: [build_ios]
-  #   if: ${{ needs.build_ios.outputs.build_id }}
-  #   type: custom
-  #   env:
-  #     PUSH_GIT_TAG: "true"
-  #   steps:
-  #     - name: Create and push tag
-  #       run: bun scripts/tag-build.ts ios ${{ needs.build_ios.outputs.build_id }}
+  # Tag the Android binary on the commit it was built from
+  tag_android_build:
+    name: Tag Android build
+    needs: [build_android]
+    environment: production
+    env:
+      TAG_PLATFORM: android
+      TAG_APP_VERSION: ${{ needs.build_android.outputs.app_version }}
+      TAG_BUILD_NUMBER: ${{ needs.build_android.outputs.app_build_version }}
+      TAG_RUNTIME_VERSION: ${{ needs.build_android.outputs.runtime_version }}
+      TAG_COMMIT: ${{ needs.build_android.outputs.git_commit_hash }}
+      TAG_BUILD_ID: ${{ needs.build_android.outputs.build_id }}
+    steps:
+      - uses: eas/checkout
+      - name: Tag the build
+        run: bun scripts/eas-tag.ts build
 
-  # # Tag Android OTA update
-  # tag_android_update:
-  #   name: Tag Android OTA Update
-  #   needs: [publish_android_update, get_android_build]
-  #   if: ${{ needs.get_android_build.outputs.build_id }}
-  #   type: custom
-  #   env:
-  #     PUSH_GIT_TAG: "true"
-  #   steps:
-  #     - name: Create and push tag
-  #       run: bun scripts/tag-update.ts android ${{ needs.get_android_build.outputs.build_id }}
+  # Tag the iOS binary on the commit it was built from
+  tag_ios_build:
+    name: Tag iOS build
+    needs: [build_ios]
+    environment: production
+    env:
+      TAG_PLATFORM: ios
+      TAG_APP_VERSION: ${{ needs.build_ios.outputs.app_version }}
+      TAG_BUILD_NUMBER: ${{ needs.build_ios.outputs.app_build_version }}
+      TAG_RUNTIME_VERSION: ${{ needs.build_ios.outputs.runtime_version }}
+      TAG_COMMIT: ${{ needs.build_ios.outputs.git_commit_hash }}
+      TAG_BUILD_ID: ${{ needs.build_ios.outputs.build_id }}
+    steps:
+      - uses: eas/checkout
+      - name: Tag the build
+        run: bun scripts/eas-tag.ts build
 
-  # # Tag iOS OTA update
-  # tag_ios_update:
-  #   name: Tag iOS OTA Update
-  #   needs: [publish_ios_update, get_ios_build]
-  #   if: ${{ needs.get_ios_build.outputs.build_id }}
-  #   type: custom
-  #   env:
-  #     PUSH_GIT_TAG: "true"
-  #   steps:
-  #     - name: Create and push tag
-  #       run: bun scripts/tag-update.ts ios ${{ needs.get_ios_build.outputs.build_id }}
+  # Tag the Android OTA update on the commit it was bundled from
+  tag_android_update:
+    name: Tag Android update
+    needs: [publish_android_update, get_android_build]
+    environment: production
+    env:
+      TAG_PLATFORM: android
+      TAG_APP_VERSION: ${{ needs.get_android_build.outputs.app_version }}
+      TAG_BUILD_NUMBER: ${{ needs.get_android_build.outputs.app_build_version }}
+      TAG_UPDATES_JSON: ${{ needs.publish_android_update.outputs.updates_json }}
+    steps:
+      - uses: eas/checkout
+      - name: Tag the update
+        run: bun scripts/eas-tag.ts update
+
+  # Tag the iOS OTA update on the commit it was bundled from
+  tag_ios_update:
+    name: Tag iOS update
+    needs: [publish_ios_update, get_ios_build]
+    environment: production
+    env:
+      TAG_PLATFORM: ios
+      TAG_APP_VERSION: ${{ needs.get_ios_build.outputs.app_version }}
+      TAG_BUILD_NUMBER: ${{ needs.get_ios_build.outputs.app_build_version }}
+      TAG_UPDATES_JSON: ${{ needs.publish_ios_update.outputs.updates_json }}
+    steps:
+      - uses: eas/checkout
+      - name: Tag the update
+        run: bun scripts/eas-tag.ts update

@@ -7,25 +7,48 @@ defaults:
     working_directory: <WORKING_DIRECTORY>
 
 on:
-  push:
-    branches:
-      - release/app/*
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        required: false
+        description: "Version to build, x.y.z. Defaults to the release/app/x.y.z branch name."
 
 jobs:
-  # Extract version from branch name (e.g. release/app/1.0.0 -> 1.0.0)
+  # This workflow is manual only — a push to `release/app/x.y.z` triggers
+  # `release:prod` instead, and two workflows on one branch double-build. So the
+  # version comes from `-F version=x.y.z`; `eas workflow:run` carries no ref for
+  # the branch fallback below to read.
+  #
+  # `${{ inputs.version }}` and `${{ github.ref_name }}` render as the literal
+  # string "undefined" when their context is absent — a push event carries no
+  # `inputs`, and `eas workflow:run` carries no ref. `[ -n "$VAR" ]` reads those
+  # four letters as a value. Both are normalised with a `case` before anything
+  # tests them.
+  #
+  # `case` rather than `[ … ] && VERSION=""`: the step runs under
+  # `/bin/bash -eo pipefail`, where a bare test-and-assign whose test is false
+  # makes the list return non-zero.
   extract_version:
     name: Extract Version
     outputs:
       version: ${{ steps.parse.outputs.version }}
     steps:
       - id: parse
-        name: Parse version from branch
+        name: Parse version
         working_directory: .
         run: |
-          REF_NAME="${{ github.ref_name }}"
-          VERSION="${REF_NAME##release/app/}"
+          VERSION="${{ inputs.version }}"
+          case "$VERSION" in undefined|null) VERSION="" ;; esac
+          if [ -z "$VERSION" ]; then
+            REF_NAME="${{ github.ref_name }}"
+            case "$REF_NAME" in
+              release/app/*) VERSION="${REF_NAME##release/app/}" ;;
+            esac
+          fi
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "ERROR: Invalid version format: $VERSION (expected x.y.z)"
+            echo "ERROR: Invalid version format: '$VERSION' (expected x.y.z)"
+            echo "Pass one explicitly with -F version=x.y.z, or push to release/app/x.y.z."
             exit 1
           fi
           echo "Version: $VERSION"
@@ -74,3 +97,39 @@ jobs:
     type: submit
     params:
       build_id: ${{ needs.build_ios.outputs.build_id }}
+
+  # Tag each binary on the commit it was built from — the same jobs, and the same
+  # reasoning, as `release:prod.yml`. A binary built here can later receive an
+  # OTA update from `release:prod`, whose tag names this build number, so an
+  # untagged build would leave that update pointing at nothing.
+  tag_android_build:
+    name: Tag Android build
+    needs: [build_android]
+    environment: production
+    env:
+      TAG_PLATFORM: android
+      TAG_APP_VERSION: ${{ needs.build_android.outputs.app_version }}
+      TAG_BUILD_NUMBER: ${{ needs.build_android.outputs.app_build_version }}
+      TAG_RUNTIME_VERSION: ${{ needs.build_android.outputs.runtime_version }}
+      TAG_COMMIT: ${{ needs.build_android.outputs.git_commit_hash }}
+      TAG_BUILD_ID: ${{ needs.build_android.outputs.build_id }}
+    steps:
+      - uses: eas/checkout
+      - name: Tag the build
+        run: bun scripts/eas-tag.ts build
+
+  tag_ios_build:
+    name: Tag iOS build
+    needs: [build_ios]
+    environment: production
+    env:
+      TAG_PLATFORM: ios
+      TAG_APP_VERSION: ${{ needs.build_ios.outputs.app_version }}
+      TAG_BUILD_NUMBER: ${{ needs.build_ios.outputs.app_build_version }}
+      TAG_RUNTIME_VERSION: ${{ needs.build_ios.outputs.runtime_version }}
+      TAG_COMMIT: ${{ needs.build_ios.outputs.git_commit_hash }}
+      TAG_BUILD_ID: ${{ needs.build_ios.outputs.build_id }}
+    steps:
+      - uses: eas/checkout
+      - name: Tag the build
+        run: bun scripts/eas-tag.ts build

@@ -1,0 +1,266 @@
+import { describe, expect, test } from "bun:test";
+import expoConfig from "../app.config";
+import {
+	APP_LABEL,
+	EXPO_ACCOUNT,
+	EXPO_SLUG,
+	type Fetch,
+	GITHUB_REPOSITORY,
+	pushTag,
+	readTagInput,
+	TAG_PREFIX,
+	type Tag,
+	tagFor,
+} from "./eas-tag";
+
+const PROJECT_URL = `https://expo.dev/accounts/${EXPO_ACCOUNT}/projects/${EXPO_SLUG}`;
+
+const COMMIT = "a4ab582ca03268e625f367b2acab143bf0ae160b";
+const OTHER_COMMIT = "e28801f27ba1dc0ab00251470cfc2381fa9e7312";
+const BUILD_ID = "63339c1e-2f8b-4819-aff7-29eda051865e";
+const GROUP_ID = "acfbadee-fca7-4da1-b33d-94f907aa3029";
+const RUNTIME = "08a723e5fc8d60984cf275249c7316c99f29330a";
+
+const BUILD_ENV = {
+	TAG_PLATFORM: "ios",
+	TAG_APP_VERSION: "1.0.0",
+	TAG_BUILD_NUMBER: "5",
+	TAG_RUNTIME_VERSION: RUNTIME,
+	TAG_COMMIT: COMMIT,
+	TAG_BUILD_ID: BUILD_ID,
+};
+
+/**
+ * The `updates_json` output of the pre-packaged `update` job, verbatim in shape
+ * — one entry, because each publish job names a single platform.
+ */
+const UPDATES_JSON = JSON.stringify([
+	{
+		id: "01a0c711-7f0f-707b-8d9f-e99794b6092d",
+		group: GROUP_ID,
+		branch: "production",
+		message: "🐛 fix: an example commit message (#1)",
+		runtimeVersion: RUNTIME,
+		platform: "ios",
+		gitCommitHash: COMMIT,
+	},
+]);
+
+const UPDATE_ENV = {
+	TAG_PLATFORM: "ios",
+	TAG_APP_VERSION: "1.0.0",
+	TAG_BUILD_NUMBER: "5",
+	TAG_UPDATES_JSON: UPDATES_JSON,
+};
+
+describe("readTagInput", () => {
+	test("reads a build from the build job's outputs", () => {
+		expect(readTagInput("build", BUILD_ENV)).toEqual({
+			success: true,
+			data: {
+				kind: "build",
+				platform: "ios",
+				appVersion: "1.0.0",
+				buildNumber: "5",
+				runtimeVersion: RUNTIME,
+				commit: COMMIT,
+				buildId: BUILD_ID,
+			},
+		});
+	});
+
+	test("reads an update from the publish job's updates_json", () => {
+		expect(readTagInput("update", UPDATE_ENV)).toEqual({
+			success: true,
+			data: {
+				kind: "update",
+				platform: "ios",
+				appVersion: "1.0.0",
+				buildNumber: "5",
+				runtimeVersion: RUNTIME,
+				commit: COMMIT,
+				groupId: GROUP_ID,
+			},
+		});
+	});
+
+	test("rejects an unknown kind", () => {
+		const result = readTagInput("release", BUILD_ENV);
+		expect(result.success).toBe(false);
+	});
+
+	/**
+	 * EAS renders an absent output as the literal string "undefined" — the same
+	 * trap `extract_version` normalises. A tag named `…/undefined+undefined` is
+	 * worse than no tag.
+	 */
+	test.each(["", "undefined", "null"])("treats %p as missing", (value) => {
+		const result = readTagInput("build", { ...BUILD_ENV, TAG_BUILD_NUMBER: value });
+		expect(result).toEqual({ success: false, error: expect.stringContaining("TAG_BUILD_NUMBER") });
+	});
+
+	test.each([
+		["TAG_PLATFORM", "web"],
+		["TAG_APP_VERSION", "1.0"],
+		["TAG_BUILD_NUMBER", "5a"],
+		["TAG_COMMIT", "a4ab582"],
+		["TAG_BUILD_ID", "not-a-build"],
+	])("rejects a malformed %s", (key, value) => {
+		const result = readTagInput("build", { ...BUILD_ENV, [key]: value });
+		expect(result).toEqual({ success: false, error: expect.stringContaining(key) });
+	});
+
+	test("rejects updates_json that is not JSON", () => {
+		const result = readTagInput("update", { ...UPDATE_ENV, TAG_UPDATES_JSON: "[{" });
+		expect(result).toEqual({ success: false, error: expect.stringContaining("TAG_UPDATES_JSON") });
+	});
+
+	test("rejects updates_json with no update for the platform", () => {
+		const result = readTagInput("update", { ...UPDATE_ENV, TAG_PLATFORM: "android" });
+		expect(result).toEqual({ success: false, error: expect.stringContaining("android") });
+	});
+
+	test("rejects an update with no git commit", () => {
+		const [update] = JSON.parse(UPDATES_JSON) as Record<string, unknown>[];
+		const result = readTagInput("update", {
+			...UPDATE_ENV,
+			TAG_UPDATES_JSON: JSON.stringify([{ ...update, gitCommitHash: undefined }]),
+		});
+		expect(result).toEqual({ success: false, error: expect.stringContaining("gitCommitHash") });
+	});
+});
+
+describe("tagFor", () => {
+	test("names a build by platform, version and build number", () => {
+		const input = readTagInput("build", BUILD_ENV);
+		if (!input.success) throw new Error(input.error);
+		const tag = tagFor(input.data);
+
+		expect(tag.name).toBe(`${TAG_PREFIX}/build/ios/1.0.0+5`);
+		expect(tag.commit).toBe(COMMIT);
+		expect(tag.message).toContain(`${APP_LABEL} iOS 1.0.0 (5)`);
+		expect(tag.message).toContain(`${PROJECT_URL}/builds/${BUILD_ID}`);
+		expect(tag.message).toContain(RUNTIME);
+	});
+
+	/**
+	 * Every OTA onto one binary shares its version and build number, so the
+	 * update group is what keeps two pushes to one release branch from
+	 * colliding. Keying on the build id instead would fail the second push on a
+	 * tag that already existed.
+	 */
+	test("names an update by the binary it lands on and its group", () => {
+		const input = readTagInput("update", UPDATE_ENV);
+		if (!input.success) throw new Error(input.error);
+		const tag = tagFor(input.data);
+
+		expect(tag.name).toBe(`${TAG_PREFIX}/update/ios/1.0.0+5/acfbadee`);
+		expect(tag.commit).toBe(COMMIT);
+		expect(tag.message).toContain(`${APP_LABEL} iOS OTA update onto 1.0.0 (5)`);
+		expect(tag.message).toContain(`${PROJECT_URL}/updates/${GROUP_ID}`);
+	});
+
+	test("labels Android as Android", () => {
+		const input = readTagInput("build", { ...BUILD_ENV, TAG_PLATFORM: "android" });
+		if (!input.success) throw new Error(input.error);
+
+		expect(tagFor(input.data).name).toBe(`${TAG_PREFIX}/build/android/1.0.0+5`);
+		expect(tagFor(input.data).message).toContain(`${APP_LABEL} Android 1.0.0 (5)`);
+	});
+});
+
+describe("the constants", () => {
+	test("name the EAS project app.config.ts binds to", () => {
+		expect(expoConfig.owner).toBe(EXPO_ACCOUNT);
+		expect(expoConfig.slug).toBe(EXPO_SLUG);
+	});
+});
+
+type Call = { readonly method: string; readonly path: string; readonly body: unknown };
+
+/**
+ * A GitHub stand-in that answers from a table keyed on "METHOD path" and
+ * records every call, so a test can assert both the outcome and that nothing
+ * was written when nothing should have been.
+ */
+function fakeGitHub(routes: Readonly<Record<string, readonly [number, unknown]>>) {
+	const calls: Call[] = [];
+	const fetch: Fetch = async (url, init) => {
+		const method = init?.method ?? "GET";
+		const path = url.replace(`https://api.github.com/repos/${GITHUB_REPOSITORY}`, "");
+		calls.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+		const route = routes[`${method} ${path}`];
+		if (!route) return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+		const [status, body] = route;
+		return new Response(JSON.stringify(body), { status });
+	};
+	return { calls, fetch };
+}
+
+const TAG: Tag = { name: `${TAG_PREFIX}/build/ios/1.0.0+5`, commit: COMMIT, message: `${APP_LABEL} iOS 1.0.0 (5)` };
+const REF_PATH = `/git/ref/tags/${TAG_PREFIX.split("/").map(encodeURIComponent).join("/")}/build/ios/1.0.0%2B5`;
+
+describe("pushTag", () => {
+	test("creates an annotated tag and its ref when neither exists", async () => {
+		const github = fakeGitHub({
+			"POST /git/tags": [201, { sha: "tagobject" }],
+			"POST /git/refs": [201, { ref: `refs/tags/${TAG.name}` }],
+		});
+		const result = await pushTag({ token: "t", tag: TAG, fetch: github.fetch });
+
+		expect(result).toEqual({ success: true, data: "created" });
+		expect(github.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+			`GET ${REF_PATH}`,
+			"POST /git/tags",
+			"POST /git/refs",
+		]);
+		expect(github.calls[1]?.body).toEqual({ tag: TAG.name, message: TAG.message, object: COMMIT, type: "commit" });
+		expect(github.calls[2]?.body).toEqual({ ref: `refs/tags/${TAG.name}`, sha: "tagobject" });
+	});
+
+	/** A re-run job must not turn a finished release red. */
+	test("succeeds without writing when the tag already points at the commit", async () => {
+		const github = fakeGitHub({
+			[`GET ${REF_PATH}`]: [200, { object: { type: "tag", sha: "tagobject" } }],
+			"GET /git/tags/tagobject": [200, { object: { type: "commit", sha: COMMIT } }],
+		});
+		const result = await pushTag({ token: "t", tag: TAG, fetch: github.fetch });
+
+		expect(result).toEqual({ success: true, data: "exists" });
+		expect(github.calls.every((c) => c.method === "GET")).toBe(true);
+	});
+
+	test("accepts a lightweight tag already on the commit", async () => {
+		const github = fakeGitHub({ [`GET ${REF_PATH}`]: [200, { object: { type: "commit", sha: COMMIT } }] });
+
+		expect(await pushTag({ token: "t", tag: TAG, fetch: github.fetch })).toEqual({ success: true, data: "exists" });
+	});
+
+	test("refuses to move a tag that points somewhere else", async () => {
+		const github = fakeGitHub({ [`GET ${REF_PATH}`]: [200, { object: { type: "commit", sha: OTHER_COMMIT } }] });
+		const result = await pushTag({ token: "t", tag: TAG, fetch: github.fetch });
+
+		expect(result).toEqual({ success: false, error: expect.stringContaining("e28801f") });
+		expect(github.calls.every((c) => c.method === "GET")).toBe(true);
+	});
+
+	/**
+	 * `eas workflow:run` uploads the local tree, so a manual run can build a
+	 * commit GitHub has never seen.
+	 */
+	test("explains a commit GitHub does not have", async () => {
+		const github = fakeGitHub({ "POST /git/tags": [422, { message: "Object does not exist" }] });
+		const result = await pushTag({ token: "t", tag: TAG, fetch: github.fetch });
+
+		expect(result).toEqual({ success: false, error: expect.stringContaining("push the commit") });
+	});
+
+	test("names the token when GitHub refuses it", async () => {
+		const github = fakeGitHub({
+			"POST /git/tags": [403, { message: "Resource not accessible by personal access token" }],
+		});
+		const result = await pushTag({ token: "t", tag: TAG, fetch: github.fetch });
+
+		expect(result).toEqual({ success: false, error: expect.stringContaining("GITHUB_TAG_TOKEN") });
+	});
+});
