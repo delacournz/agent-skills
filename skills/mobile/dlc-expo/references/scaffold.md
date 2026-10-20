@@ -11,7 +11,7 @@ Follow these steps in order when creating a new Expo app via the `dlc-expo` skil
    - **Bundler port** (default `8081`). Used in the `dev`, `android`, and `ios` scripts in `package.json`.
    - Parent directory to scaffold into (default: current working directory).
    - **Component library?** (Delacour UI / HeroUI Native / none, default `none`). Any choice other than `none` implies Uniwind (step 14). Ask per the "Component Library Choice" section of [../SKILL.md](../SKILL.md). Defer the install until after Uniwind (see step 15).
-   - **Set up EAS Workflows?** (yes/no, default `no`). If yes, also collect the iOS App Store Connect App ID and Apple Developer Team ID up front (used by [eas-workflows.md](./eas-workflows.md) step 1). Defer the actual EAS setup until after the base scaffold (and any Uniwind / component library add-ons); see step 16.
+   - **Set up EAS Workflows?** (yes/no, default `no`). If yes, also collect the iOS App Store Connect App ID, Apple Developer Team ID, and the GitHub tag values (`owner/repo`, Expo account, tag prefix, app label) up front (used by [eas-workflows.md](./eas-workflows.md) step 1). Defer the actual EAS setup until after the base scaffold (and any Uniwind / component library add-ons); see step 16.
 
    Ask the user these up front. If the user provides only an app name, suggest `com.<user>.<appname>` defaults for both IDs but still confirm before writing them. If the user does not specify a port, use `8081`.
 
