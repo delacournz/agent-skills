@@ -3,7 +3,7 @@ name: dlc-pr-feedback
 description: Work through all review feedback on a GitHub pull request using the gh CLI. Collects every unresolved review thread, review body and PR comment (human and bot), fixes each one in its own commit, runs the repo's checks, pushes, then replies on each thread with a link to the fixing commit and resolves it. Use when the user wants to address PR comments, resolve review feedback, or close out review threads. Triggers on "address PR comments", "resolve review comments", "fix the PR feedback", "work through review threads", "handle the review", "/pr-feedback".
 metadata:
   author: chris@delacour.co.nz
-  version: "0.1.0"
+  version: "0.2.0"
   category: git
   tags: [git, github, pull-request, code-review, gh-cli, workflow]
   argument-hint: "[<pr-number-or-url>]"
@@ -102,7 +102,8 @@ Record the full SHA next to the thread.
 Commit rules:
 
 - Follow the repo's commit convention: `commitlint.config.*`, `AGENTS.md`, `CLAUDE.md`, then the majority style of recent history. Default is `<gitmoji> <type>(<scope>): <imperative summary>`.
-- If the repo says review fixes are fixups, use `git commit --fixup <sha>` against the commit the thread is about.
+- The subject describes the fix the commit makes, e.g. `🐛 fix(auth): compare token expiry in milliseconds`. A reviewer reading only the PR's commit list must be able to tell what changed.
+- Never use `git commit --fixup` / `--squash`, and never write subjects like `fixup! …`, `squash! …`, `address review`, `PR feedback` or `fix comments`. If the repo explicitly requires autosquash fixups, ask the user before making one.
 - Follow the repo's commit signing rule (for example a `scripts/check-signing.sh`). Stop if it fails.
 - Follow the repo's and the user's rules on attribution trailers. Add none they have excluded.
 - Never `--no-verify`. Never `--amend` or rebase commits that are already pushed.
